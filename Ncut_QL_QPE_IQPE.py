@@ -71,7 +71,6 @@ def _deflate_against(v: np.ndarray, basis_vecs):
     vv, _ = _normalize(vv)
     return vv
 
-
 # ============================================================
 # QLanczos (Aer statevector Krylov, QR basis)
 # ============================================================
@@ -1050,6 +1049,10 @@ def main():
 
 #####################################      Chỗ sửa đường dẫn     ######################################################
 if __name__ == "__main__":
-    input_path = "/content/drive/MyDrive/Test/in1"
+    parser = argparse.ArgumentParser(description="Tên file ảnh đầu vào bài toán")
+    parser.add_argument("--nameImage", type=String, default=100, help="Ten file")
+    args = parser.parse_args()
+    
+    input_path = "/content/drive/MyDrive/Test/" + args.nameImage
     main()
 ########################################################################################################################
