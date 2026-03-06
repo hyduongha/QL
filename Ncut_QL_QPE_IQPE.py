@@ -1015,7 +1015,6 @@ def main():
     excel_path = os.path.join("/content/drive/MyDrive/Test/log.xlsx")  # file Excel lưu
     excel_path_Vector = os.path.join("/content/drive/MyDrive/Test/logVector.xlsx")  # file Excel lưu
     excel_path_Eig = os.path.join("/content/drive/MyDrive/Test/logEig.xlsx")  # file Excel lưu
-    input_path = "/content/drive/MyDrive/Test/in1"
     output_path = "/content/drive/MyDrive/Test/out"
 
     if not os.path.isdir(input_path):
@@ -1049,4 +1048,5 @@ def main():
         print("Thời gian xử lý 1 ảnh ",end-start)
 
 if __name__ == "__main__":
+    input_path = "/content/drive/MyDrive/Test/in1"
     main()
