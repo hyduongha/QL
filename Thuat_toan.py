@@ -1010,8 +1010,8 @@ def smallest_eigenpairs_ncut(W_coo, k):
 
     return evals, evecs
 
-def main():
-
+def main(name):
+    input_path = "/content/drive/MyDrive/Test/" + name
     excel_path = os.path.join("/content/drive/MyDrive/Test/log.xlsx")  # file Excel lưu
     excel_path_Vector = os.path.join("/content/drive/MyDrive/Test/logVector.xlsx")  # file Excel lưu
     excel_path_Eig = os.path.join("/content/drive/MyDrive/Test/logEig.xlsx")  # file Excel lưu
@@ -1049,9 +1049,8 @@ def main():
 
 #####################################      Chỗ sửa đường dẫn     ######################################################
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Tên file ảnh đầu vào bài toán")
-    parser.add_argument("--nameImage", type=str, default="test.jpg", help="Ten file")
-    args = parser.parse_args(args=[])
-    input_path = "/content/drive/MyDrive/Test/" + args.nameImage
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("nameImage", type=str)
+    args = parser.parse_args()
+    main(args.nameImage)
 ########################################################################################################################
