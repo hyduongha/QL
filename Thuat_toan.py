@@ -449,8 +449,8 @@ def compute_ncut_ql_pipeline_three(
 
     ###################### Thay bằng 3 dòng này ##########################
     k_eff = min(k, len(E1))
-    E_ql = E1[:k_eff]
-    V_ql_c = V1[:, :k_eff]
+    E_ql = E1[1:k_eff+1]
+    V_ql_c = V1[:, 1:k_eff+1]
     '''
     keep = np.where(np.abs(E1) > zero_tol)[0]
     if keep.size == 0:
@@ -513,7 +513,8 @@ def compute_ncut_ql_pipeline_three(
     E_iqpe_list = []
     iqpe_selected_vecs = []
 
-    for i in range(k):
+    k_eff = V_ql_c.shape[1]
+    for i in range(k_eff):
         psi = V_ql_c[:, i]
         psi = _deflate_against(psi, iqpe_selected_vecs)
         psi, _ = _normalize(psi)
@@ -695,7 +696,7 @@ def normalized_cuts_eigsh(imagename, image_path, output_path, k, sigma_i, sigma_
     A = build_ncut_matrix(W_coo)
     A = np.asarray(A, dtype=float)
     evals, vecs = np.linalg.eigh(A)
-    idx = np.argsort(evals)[:k]
+    idx = np.argsort(evals)[1:k+1]
     evals = evals[idx]
     vecs = vecs[:, idx]
     
