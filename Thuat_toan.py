@@ -694,10 +694,10 @@ def normalized_cuts_eigsh(imagename, image_path, output_path, k, sigma_i, sigma_
     W_coo = compute_weight_matrix_coo_knn(image, sigma_i, sigma_x)
     A = build_ncut_matrix(W_coo)
     A = np.asarray(A, dtype=float)
-    evals, evecs = np.linalg.eigh(A)
+    evals, vecs = np.linalg.eigh(A)
     idx = np.argsort(evals)[:k]
     evals = evals[idx]
-    evecs = evecs[:, idx]
+    vecs = vecs[:, idx]
     
     end_vecs = time.perf_counter()
 
