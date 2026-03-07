@@ -432,7 +432,7 @@ def compute_ncut_ql_pipeline_three(
 
     E1, V1 = _ql_multistart_select(
         A,
-        k=max(k + 2, k),
+        k=max(k + 3, k),
         n_starts=n_starts,
         k_per_start=k_per_start,
         m_krylov=m_krylov,
@@ -686,6 +686,11 @@ def build_ncut_matrix(W_coo):
     A = 0.5 * (A + A.T)
     return A
     
+def row_normalize(X, eps=1e-12):
+    X = np.asarray(X, dtype=float)
+    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    return X / np.maximum(norms, eps)
+    
 def normalized_cuts_eigsh(imagename, image_path, output_path, k, sigma_i, sigma_x):
     image = io.imread(image_path)
     image = color.gray2rgb(image) if image.ndim == 2 else image[:, :, :3] if image.shape[2] == 4 else image
@@ -706,16 +711,16 @@ def normalized_cuts_eigsh(imagename, image_path, output_path, k, sigma_i, sigma_
 
     V_ql, V_qpe, V_iqpe = align_eigenvector_signs(vecs, V_ql, V_qpe, V_iqpe)
 
-    labels = assign_labels(vecs, k)
+    labels = assign_labels(row_normalize(vecs), k)
     save_seg_file(labels.reshape(image.shape[:2]), image.shape, output_path + "_L.seg", imagename)
 
-    labels = assign_labels(V_ql, k)
+    labels = assign_labels(row_normalize(V_ql), k)
     save_seg_file(labels.reshape(image.shape[:2]), image.shape, output_path + "_QL.seg", imagename)
 
-    labels = assign_labels(V_qpe, k)
+    labels = assign_labels(row_normalize(V_qpe), k)
     save_seg_file(labels.reshape(image.shape[:2]), image.shape, output_path + "_QPE.seg", imagename)
 
-    labels = assign_labels(V_iqpe, k)
+    labels = assign_labels(row_normalize(V_iqpe), k)
     save_seg_file(labels.reshape(image.shape[:2]), image.shape, output_path + "_IQPE.seg", imagename)
     
     del W_coo
