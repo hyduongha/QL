@@ -714,8 +714,14 @@ def compute_ncut_ql_pipeline_three(
     
             E_qpe = np.concatenate([E_qpe, np.array(extra_E[:missing], dtype=float)])
     
-    V_qpe = _realify_columns(V_qpe_c[:, :k])
     E_qpe = E_qpe[:k]
+    V_qpe_c = V_qpe_c[:, :k]
+    
+    idx = np.argsort(E_qpe)
+    E_qpe = E_qpe[idx]
+    V_qpe_c = V_qpe_c[:, idx]
+    
+    V_qpe = _realify_columns(V_qpe_c)
     
     end_V_qpe = time.perf_counter()
 
@@ -807,8 +813,14 @@ def compute_ncut_ql_pipeline_three(
     
             E_iqpe = np.concatenate([E_iqpe, np.array(extra_E[:missing], dtype=float)])
     
-    V_iqpe = _realify_columns(V_iqpe_c[:, :k])
     E_iqpe = E_iqpe[:k]
+    V_iqpe_c = V_iqpe_c[:, :k]
+    
+    idx = np.argsort(E_iqpe)
+    E_iqpe = E_iqpe[idx]
+    V_iqpe_c = V_iqpe_c[:, idx]
+    
+    V_iqpe = _realify_columns(V_iqpe_c)
 
     end_V_iqpe = time.perf_counter()
 
