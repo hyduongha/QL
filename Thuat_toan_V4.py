@@ -521,6 +521,23 @@ def _iqpe_kitaev_refine_energy(
         "weights": w,
     }
 
+def _inverse_refine_vector(A, v0, lam, prev_vecs=None, n_iter=3, reg=1e-5):
+    prev_vecs = prev_vecs or []
+    A = np.asarray(A, dtype=float)
+    v = np.asarray(np.real(v0), dtype=float)
+    v = v / max(np.linalg.norm(v), 1e-12)
+
+    I = np.eye(A.shape[0], dtype=float)
+
+    for _ in range(n_iter):
+        M = A - lam * I + reg * I
+        x = np.linalg.solve(M, v)
+        x = _deflate_against(x, prev_vecs)
+        x = np.real(x)
+        v = x / max(np.linalg.norm(x), 1e-12)
+
+    lam_new = float(v @ A @ v)
+    return lam_new, v.astype(complex)
 
 # ============================================================
 # MAIN PIPELINE for NCut: returns 3 sets of k eigenvectors
@@ -533,7 +550,7 @@ def compute_ncut_ql_pipeline_three(
     n_starts: int = 64,
     k_per_start: int = 8,
     m_krylov: int = 48,
-    t_evol: float = 1.0,
+    t_evol: float = 10.0,
     overlap_tol: float = 0.75,
     seed: int = 123,
     zero_tol: float = 1e-5,
@@ -675,9 +692,14 @@ def compute_ncut_ql_pipeline_three(
         else:
             E_iqpe_list.append(float(E_refined))
 
-        psi = _canonicalize_phase(psi)
-        iqpe_selected_vecs.append(psi)
-        V_iqpe_list.append(psi)
+        lam_used = float(E_refined) if E_refined is not None else float(E_ql[i])
+        lam_new, v_new = _inverse_refine_vector(A, psi, lam_used, prev_vecs=iqpe_selected_vecs, n_iter=3, reg=1e-5)
+        E_iqpe_list[-1] = lam_new
+        
+        v_new = _canonicalize_phase(v_new)
+        v_new, _ = _normalize(v_new)
+        iqpe_selected_vecs.append(v_new)
+        V_iqpe_list.append(v_new)
 
     V_iqpe_c = np.column_stack(V_iqpe_list) if len(V_iqpe_list) > 0 else np.zeros((N, 0), dtype=complex)
     E_iqpe = np.array(E_iqpe_list, dtype=float)
