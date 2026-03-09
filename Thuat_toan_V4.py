@@ -662,12 +662,9 @@ def compute_ncut_ql_pipeline_three(
     ######################## V_qpe_c = np.column_stack(V_qpe_list) if len(V_qpe_list) > 0 else np.zeros((N, 0), dtype=complex)
     ######################## E_qpe = np.array(E_qpe_list, dtype=float)
     ######################## V_qpe = _realify_columns(V_qpe_c)
-
+    
     V_qpe_c = np.column_stack(V_qpe_list) if len(V_qpe_list) > 0 else np.zeros((N, 0), dtype=complex)
-    # ---------------------------------------------------------
     # FINAL SUBSPACE REFINEMENT FOR QPE
-    # QPE vectors -> QR -> Ritz refinement -> chọn non-trivial
-    # ---------------------------------------------------------
     if V_qpe_c.shape[1] > 0:
         E_qpe_ref, V_qpe_ref = _ritz_refine_from_candidates(
             A=A,
@@ -686,7 +683,40 @@ def compute_ncut_ql_pipeline_three(
         E_qpe = np.array([], dtype=float)
         V_qpe_c = np.zeros((N, 0), dtype=complex)
     
-    V_qpe = _realify_columns(V_qpe_c)
+    # ---------------------------------------------------------
+    # FALLBACK: nếu QPE bị thiếu cột thì mượn thêm từ QL
+    # ---------------------------------------------------------
+    if V_qpe_c.shape[1] < k:
+        missing = k - V_qpe_c.shape[1]
+        extra_cols = []
+        extra_E = []
+    
+        for j in range(V_ql_c.shape[1]):
+            v = V_ql_c[:, j]
+    
+            if V_qpe_c.shape[1] > 0:
+                dup = max(_overlap_abs(v, V_qpe_c[:, t]) for t in range(V_qpe_c.shape[1]))
+            else:
+                dup = 0.0
+    
+            if dup < 0.95:
+                extra_cols.append(v.reshape(-1, 1))
+                extra_E.append(float(E_ql[j]))
+    
+            if len(extra_cols) >= missing:
+                break
+    
+        if len(extra_cols) > 0:
+            if V_qpe_c.shape[1] > 0:
+                V_qpe_c = np.column_stack([V_qpe_c] + extra_cols)
+            else:
+                V_qpe_c = np.column_stack(extra_cols)
+    
+            E_qpe = np.concatenate([E_qpe, np.array(extra_E[:missing], dtype=float)])
+    
+    V_qpe = _realify_columns(V_qpe_c[:, :k])
+    E_qpe = E_qpe[:k]
+    
     end_V_qpe = time.perf_counter()
 
     # =========================================================
@@ -726,10 +756,8 @@ def compute_ncut_ql_pipeline_three(
         V_iqpe_list.append(v_new)
 
     V_iqpe_c = np.column_stack(V_iqpe_list) if len(V_iqpe_list) > 0 else np.zeros((N, 0), dtype=complex)
-    # ---------------------------------------------------------
+
     # FINAL SUBSPACE REFINEMENT FOR IQPE
-    # IQPE vectors -> QR -> Ritz refinement -> chọn non-trivial
-    # ---------------------------------------------------------
     if V_iqpe_c.shape[1] > 0:
         E_iqpe_ref, V_iqpe_ref = _ritz_refine_from_candidates(
             A=A,
@@ -748,7 +776,39 @@ def compute_ncut_ql_pipeline_three(
         E_iqpe = np.array([], dtype=float)
         V_iqpe_c = np.zeros((N, 0), dtype=complex)
     
-    V_iqpe = _realify_columns(V_iqpe_c)
+    # ---------------------------------------------------------
+    # FALLBACK: nếu IQPE bị thiếu cột thì mượn thêm từ QL
+    # ---------------------------------------------------------
+    if V_iqpe_c.shape[1] < k:
+        missing = k - V_iqpe_c.shape[1]
+        extra_cols = []
+        extra_E = []
+    
+        for j in range(V_ql_c.shape[1]):
+            v = V_ql_c[:, j]
+    
+            if V_iqpe_c.shape[1] > 0:
+                dup = max(_overlap_abs(v, V_iqpe_c[:, t]) for t in range(V_iqpe_c.shape[1]))
+            else:
+                dup = 0.0
+    
+            if dup < 0.95:
+                extra_cols.append(v.reshape(-1, 1))
+                extra_E.append(float(E_ql[j]))
+    
+            if len(extra_cols) >= missing:
+                break
+    
+        if len(extra_cols) > 0:
+            if V_iqpe_c.shape[1] > 0:
+                V_iqpe_c = np.column_stack([V_iqpe_c] + extra_cols)
+            else:
+                V_iqpe_c = np.column_stack(extra_cols)
+    
+            E_iqpe = np.concatenate([E_iqpe, np.array(extra_E[:missing], dtype=float)])
+    
+    V_iqpe = _realify_columns(V_iqpe_c[:, :k])
+    E_iqpe = E_iqpe[:k]
 
     end_V_iqpe = time.perf_counter()
 
@@ -848,7 +908,6 @@ def align_eigenvector_signs(vecs, V_ql, V_qpe, V_iqpe):
     Align signs of V_ql, V_qpe, V_iqpe to match reference eigenvectors vecs.
     Chỉ align trên số cột thực sự tồn tại của mỗi ma trận.
     """
-
     V_ql_aligned = V_ql.copy()
     V_qpe_aligned = V_qpe.copy()
     V_iqpe_aligned = V_iqpe.copy()
@@ -924,19 +983,10 @@ def normalized_cuts_eigsh(imagename, image_path, output_path, k, sigma_i, sigma_
 
     end_vecs = time.perf_counter()
 
-    E_ql, E_qpe, E_iqpe, V_ql, V_qpe, V_iqpe, start_V_ql, end_V_ql, end_V_qpe, end_V_iqpe = \
-        compute_ncut_ql_pipeline_three(A, D_vals, k)
+    E_ql, E_qpe, E_iqpe, V_ql, V_qpe, V_iqpe, start_V_ql, end_V_ql, end_V_qpe, end_V_iqpe = compute_ncut_ql_pipeline_three(A, D_vals, k)
 
     V_ql, V_qpe, V_iqpe = align_eigenvector_signs(vecs, V_ql, V_qpe, V_iqpe)
 
-    if V_qpe.shape[1] < k:
-        print(f"⚠️ V_qpe chỉ có {V_qpe.shape[1]} vector, fallback sang V_ql")
-        V_qpe = V_ql[:, :k]
-
-    if V_iqpe.shape[1] < k:
-        print(f"⚠️ V_iqpe chỉ có {V_iqpe.shape[1]} vector, fallback sang V_ql")
-        V_iqpe = V_ql[:, :k]
-    
     labels = assign_labels(row_normalize(vecs), k)
     save_seg_file(labels.reshape(image.shape[:2]), image.shape, output_path + "_L.seg", imagename)
 
