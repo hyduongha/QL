@@ -846,35 +846,29 @@ def save_seg_file(labels, image_shape, output_path, image_name="image"):
 def align_eigenvector_signs(vecs, V_ql, V_qpe, V_iqpe):
     """
     Align signs of V_ql, V_qpe, V_iqpe to match reference eigenvectors vecs.
-
-    Parameters
-    ----------
-    vecs : np.ndarray (N,k)
-        Reference eigenvectors (traditional Lanczos).
-    V_ql : np.ndarray (N,k)
-    V_qpe : np.ndarray (N,k)
-    V_iqpe : np.ndarray (N,k)
-
-    Returns
-    -------
-    V_ql_aligned, V_qpe_aligned, V_iqpe_aligned
+    Chỉ align trên số cột thực sự tồn tại của mỗi ma trận.
     """
-
-    k = vecs.shape[1]
 
     V_ql_aligned = V_ql.copy()
     V_qpe_aligned = V_qpe.copy()
     V_iqpe_aligned = V_iqpe.copy()
 
-    for i in range(k):
-        ref = vecs[:, i]
+    k_ql = min(vecs.shape[1], V_ql_aligned.shape[1])
+    k_qpe = min(vecs.shape[1], V_qpe_aligned.shape[1])
+    k_iqpe = min(vecs.shape[1], V_iqpe_aligned.shape[1])
 
+    for i in range(k_ql):
+        ref = vecs[:, i]
         if np.dot(ref, V_ql_aligned[:, i]) < 0:
             V_ql_aligned[:, i] *= -1
 
+    for i in range(k_qpe):
+        ref = vecs[:, i]
         if np.dot(ref, V_qpe_aligned[:, i]) < 0:
             V_qpe_aligned[:, i] *= -1
 
+    for i in range(k_iqpe):
+        ref = vecs[:, i]
         if np.dot(ref, V_iqpe_aligned[:, i]) < 0:
             V_iqpe_aligned[:, i] *= -1
 
@@ -935,6 +929,14 @@ def normalized_cuts_eigsh(imagename, image_path, output_path, k, sigma_i, sigma_
 
     V_ql, V_qpe, V_iqpe = align_eigenvector_signs(vecs, V_ql, V_qpe, V_iqpe)
 
+    if V_qpe.shape[1] < k:
+        print(f"⚠️ V_qpe chỉ có {V_qpe.shape[1]} vector, fallback sang V_ql")
+        V_qpe = V_ql[:, :k]
+
+    if V_iqpe.shape[1] < k:
+        print(f"⚠️ V_iqpe chỉ có {V_iqpe.shape[1]} vector, fallback sang V_ql")
+        V_iqpe = V_ql[:, :k]
+    
     labels = assign_labels(row_normalize(vecs), k)
     save_seg_file(labels.reshape(image.shape[:2]), image.shape, output_path + "_L.seg", imagename)
 
