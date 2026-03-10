@@ -1361,11 +1361,12 @@ def append_log_excel(
     print(f"📝 Appended data to: {excel_path}")
 
 def main(name):
-    input_path = "/content/drive/MyDrive/Test/K7" + name
-    excel_path = os.path.join("/content/drive/MyDrive/Test/K7/log.xlsx")  # file Excel lưu
-    excel_path_Vector = os.path.join("/content/drive/MyDrive/Test/K7/logVector.xlsx")  # file Excel lưu
-    excel_path_Eig = os.path.join("/content/drive/MyDrive/Test/K7/logEig.xlsx")  # file Excel lưu
-    output_path = "/content/drive/MyDrive/Test/K7/out"
+    numbers = re.findall(r'\d+', name)
+    input_path = "/content/drive/MyDrive/Test/" + name
+    excel_path = os.path.join("/content/drive/MyDrive/Test/log"+numbers[0]+".xlsx")  # file Excel lưu
+    excel_path_Vector = os.path.join("/content/drive/MyDrive/Test/logVector"+numbers[0]+".xlsx")  # file Excel lưu
+    excel_path_Eig = os.path.join("/content/drive/MyDrive/Test/logEig"+numbers[0]+".xlsx")  # file Excel lưu
+    output_path = "/content/drive/MyDrive/Test/out"+numbers[0]
 
     if not os.path.isdir(input_path):
         print(f"❌ Thư mục {input_path} không tồn tại!")
