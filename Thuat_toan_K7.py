@@ -969,7 +969,7 @@ def compute_ncut_ql_pipeline_three(
 
     return E_ql, E_qpe, E_iqpe, V_ql, V_qpe, V_iqpe, start_V_ql, end_V_ql, end_V_qpe, end_V_iqpe
 
-def compute_weight_matrix_coo_knn(image, sigma_i, sigma_x, k_neighbors=10):
+def compute_weight_matrix_coo_knn(image, sigma_i, sigma_x, k_neighbors=51):
     h, w, c = image.shape
     N = h * w
 
@@ -1385,7 +1385,7 @@ def main(name):
         k = int(re.search(r"_(\d+)\.png$", file_name).group(1))
 
         image_path = os.path.join(input_path, file_name)
-        print(f"📷 Đang xử lý ảnh {idx}: {image_path}")
+        print(f"📷 Đang xử lý ảnh {idx}: {image_path} và k={k}")
 
         sigma_i = 0.009
         sigma_x = 8
