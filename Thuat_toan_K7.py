@@ -1394,8 +1394,8 @@ def main(name):
         start_vecs, end_vecs, start_V_ql, end_V_ql, end_V_qpe, end_V_iqpe, evals, E_ql, E_qpe, E_iqpe, vecs, V_ql, V_qpe, V_iqpe = normalized_cuts_eigsh(file_name, image_path, save_image_name, k, sigma_i, sigma_x)
         
         append_log_excel(excel_path, file_name, start_vecs, end_vecs, start_V_ql, end_V_ql, end_V_qpe, end_V_iqpe)
-        append_eigenvalues_simple(excel_path_Eig, file_name, evals, E_ql, E_qpe, E_iqpe)
-        append_eigenvectors_row_format(excel_path_Vector, file_name, vecs, V_ql, V_qpe, V_iqpe)
+        # append_eigenvalues_simple(excel_path_Eig, file_name, evals, E_ql, E_qpe, E_iqpe)
+        # append_eigenvectors_row_format(excel_path_Vector, file_name, vecs, V_ql, V_qpe, V_iqpe)
         end = time.perf_counter()
         print("Thời gian xử lý 1 ảnh ",end-start)
 
