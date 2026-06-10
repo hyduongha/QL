@@ -969,7 +969,7 @@ def compute_ncut_ql_pipeline_three(
 
     return E_ql, E_qpe, E_iqpe, V_ql, V_qpe, V_iqpe, start_V_ql, end_V_ql, end_V_qpe, end_V_iqpe
 
-def compute_weight_matrix_coo_knn(image, sigma_i, sigma_x, k_neighbors=51):
+def compute_weight_matrix_coo_knn(image, sigma_i, sigma_x, k_neighbors=30):
     h, w, c = image.shape
     N = h * w
 
