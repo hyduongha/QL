@@ -1362,11 +1362,11 @@ def append_log_excel(
 
 def main(name):
     numbers = re.findall(r'\d+', name)
-    input_path = "/content/drive/MyDrive/Test/53633_b23_20230611_chengdu_id8047_3264x2448_K7/" + name
-    excel_path = os.path.join("/content/drive/MyDrive/Test/53633_b23_20230611_chengdu_id8047_3264x2448_K7/log"+numbers[0]+".xlsx")  # file Excel lưu
-    excel_path_Vector = os.path.join("/content/drive/MyDrive/Test/53633_b23_20230611_chengdu_id8047_3264x2448_K7/logVector"+numbers[0]+".xlsx")  # file Excel lưu
-    excel_path_Eig = os.path.join("/content/drive/MyDrive/Test/53633_b23_20230611_chengdu_id8047_3264x2448_K7/logEig"+numbers[0]+".xlsx")  # file Excel lưu
-    output_path = "/content/drive/MyDrive/Test/53633_b23_20230611_chengdu_id8047_3264x2448_K7/out"+numbers[0]
+    input_path = "/content/drive/MyDrive/53633_b23_20230611_chengdu_id8047_3264x2448_K7/" + name
+    excel_path = os.path.join("/content/drive/MyDrive/53633_b23_20230611_chengdu_id8047_3264x2448_K7/log"+numbers[0]+".xlsx")  # file Excel lưu
+    excel_path_Vector = os.path.join("/content/drive/MyDrive/53633_b23_20230611_chengdu_id8047_3264x2448_K7/logVector"+numbers[0]+".xlsx")  # file Excel lưu
+    excel_path_Eig = os.path.join("/content/drive/MyDrive/53633_b23_20230611_chengdu_id8047_3264x2448_K7/logEig"+numbers[0]+".xlsx")  # file Excel lưu
+    output_path = "/content/drive/MyDrive/53633_b23_20230611_chengdu_id8047_3264x2448_K7/out"+numbers[0]
 
     if not os.path.isdir(input_path):
         print(f"❌ Thư mục {input_path} không tồn tại!")
