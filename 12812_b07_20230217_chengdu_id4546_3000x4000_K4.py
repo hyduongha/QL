@@ -440,7 +440,9 @@ def _qpe_postselect_best_mode(
             continue
         v = block / norm
 
-        phi = int(bitstring, 2) / (2 ** t_count)
+        # m_mode là chỉ số counting-register thực sự được dùng để lấy block.
+        # Vì vậy pha phải được tính từ chính m_mode để tránh sai lệch endianness.
+        phi = float(m_mode) / (2 ** t_count)
         E_wrapped = _energy_from_phase(phi, t_evol)
         E_refined = _unwrap_to_reference(E_wrapped, E_target, t_evol)
 
@@ -759,48 +761,96 @@ def compute_ncut_ql_pipeline_three(
     end_V_ql = time.perf_counter()
 
     # =========================================================
-    # STEP 4: QPE refine from refined QL vectors
+    # STEP 4: QPE estimates eigenvalues from refined QL vectors
+    #         then inverse iteration refines eigenvectors
+    #
+    # Pipeline mới, tương tự nhánh IQPE:
+    #   V_QL -> QPE estimate E_QPE
+    #        -> inverse iteration(A, V_QL, E_QPE)
+    #        -> Ritz subspace refinement
     # =========================================================
     V_qpe_list = []
     E_qpe_list = []
-    refined_vecs_for_dup = []
+    qpe_selected_vecs = []
 
     k_eff = V_ql_c.shape[1]
+
     for i in range(k_eff):
+        # -----------------------------------------------------
+        # 1. Vector riêng QL là trạng thái đầu vào của QPE
+        # -----------------------------------------------------
         psi = V_ql_c[:, i]
-        psi = _deflate_against(psi, refined_vecs_for_dup)
+        psi = _deflate_against(psi, qpe_selected_vecs)
+        psi, _ = _normalize(psi)
         psi_sv = Statevector(psi)
 
-        v_ref, info = _qpe_postselect_best_mode(
+        # -----------------------------------------------------
+        # 2. QPE hậu chọn mode để ước lượng eigenvalue.
+        #    v_post chỉ phục vụ việc nhận diện mode; vector này
+        #    KHÔNG được dùng trực tiếp làm vector phân đoạn.
+        # -----------------------------------------------------
+        v_post, info = _qpe_postselect_best_mode(
             U=U,
             t_count=t_count,
             psi_in=psi_sv,
             E_target=float(E_ql[i]),
             t_evol=t_evol,
-            prev_refined_vecs=refined_vecs_for_dup,
+            prev_refined_vecs=qpe_selected_vecs,
             topM=topM,
             w_energy=w_energy,
             w_overlap=w_overlap,
             w_dup=w_dup,
         )
 
-        if v_ref is None:
-            v_ref = psi
-            E_qpe_list.append(float(E_ql[i]))
+        # -----------------------------------------------------
+        # 3. Lấy eigenvalue QPE; nếu QPE thất bại thì fallback
+        #    sang eigenvalue QL.
+        # -----------------------------------------------------
+        if (
+            v_post is None
+            or info is None
+            or info.get("fallback", False)
+            or "E_refined" not in info
+        ):
+            lam_used = float(E_ql[i])
         else:
-            E_qpe_list.append(float(info["E_refined"]))
+            lam_used = float(info["E_refined"])
 
-        v_ref = _canonicalize_phase(v_ref)
-        v_ref, _ = _normalize(v_ref)
-        refined_vecs_for_dup.append(v_ref)
-        V_qpe_list.append(v_ref)
+        # -----------------------------------------------------
+        # 4. Dùng eigenvalue QPE cùng vector QL để inverse
+        #    iteration, giống cách nhánh IQPE đang thực hiện.
+        # -----------------------------------------------------
+        try:
+            lam_new, v_new = _inverse_refine_vector(
+                A,
+                psi,
+                lam_used,
+                prev_vecs=qpe_selected_vecs,
+                n_iter=3,
+                reg=1e-5,
+            )
+        except np.linalg.LinAlgError:
+            # Hệ tuyến tính có thể gần suy biến khi lam_used rất
+            # gần eigenvalue thật. Khi đó giữ lại nghiệm QL.
+            v_new = psi.copy()
+            lam_new = float(np.real(np.vdot(v_new, A @ v_new)))
 
-    ######################## V_qpe_c = np.column_stack(V_qpe_list) if len(V_qpe_list) > 0 else np.zeros((N, 0), dtype=complex)
-    ######################## E_qpe = np.array(E_qpe_list, dtype=float)
-    ######################## V_qpe = _realify_columns(V_qpe_c)
-    
-    V_qpe_c = np.column_stack(V_qpe_list) if len(V_qpe_list) > 0 else np.zeros((N, 0), dtype=complex)
+        v_new = _canonicalize_phase(v_new)
+        v_new, _ = _normalize(v_new)
+
+        E_qpe_list.append(float(lam_new))
+        qpe_selected_vecs.append(v_new)
+        V_qpe_list.append(v_new)
+
+    V_qpe_c = (
+        np.column_stack(V_qpe_list)
+        if len(V_qpe_list) > 0
+        else np.zeros((N, 0), dtype=complex)
+    )
+
+    # =========================================================
     # FINAL SUBSPACE REFINEMENT FOR QPE
+    # =========================================================
     if V_qpe_c.shape[1] > 0:
         E_qpe_ref, V_qpe_ref = _ritz_refine_from_candidates(
             A=A,
@@ -808,7 +858,7 @@ def compute_ncut_ql_pipeline_three(
             n_keep=min(max(2 * k, k + 2), V_qpe_c.shape[1]),
             qr_tol=1e-12,
         )
-    
+
         E_qpe, V_qpe_c = _select_nontrivial_by_degree(
             E=E_qpe_ref,
             V=V_qpe_ref,
@@ -818,7 +868,7 @@ def compute_ncut_ql_pipeline_three(
     else:
         E_qpe = np.array([], dtype=float)
         V_qpe_c = np.zeros((N, 0), dtype=complex)
-    
+
     # ---------------------------------------------------------
     # FALLBACK: nếu QPE bị thiếu cột thì mượn thêm từ QL
     # ---------------------------------------------------------
@@ -826,39 +876,46 @@ def compute_ncut_ql_pipeline_three(
         missing = k - V_qpe_c.shape[1]
         extra_cols = []
         extra_E = []
-    
+
         for j in range(V_ql_c.shape[1]):
             v = V_ql_c[:, j]
-    
+
             if V_qpe_c.shape[1] > 0:
-                dup = max(_overlap_abs(v, V_qpe_c[:, t]) for t in range(V_qpe_c.shape[1]))
+                dup = max(
+                    _overlap_abs(v, V_qpe_c[:, t])
+                    for t in range(V_qpe_c.shape[1])
+                )
             else:
                 dup = 0.0
-    
+
             if dup < 0.95:
                 extra_cols.append(v.reshape(-1, 1))
                 extra_E.append(float(E_ql[j]))
-    
+
             if len(extra_cols) >= missing:
                 break
-    
+
         if len(extra_cols) > 0:
             if V_qpe_c.shape[1] > 0:
                 V_qpe_c = np.column_stack([V_qpe_c] + extra_cols)
             else:
                 V_qpe_c = np.column_stack(extra_cols)
-    
-            E_qpe = np.concatenate([E_qpe, np.array(extra_E[:missing], dtype=float)])
-    
+
+            E_qpe = np.concatenate([
+                E_qpe,
+                np.array(extra_E[:missing], dtype=float),
+            ])
+
     E_qpe = E_qpe[:k]
     V_qpe_c = V_qpe_c[:, :k]
-    
-    idx = np.argsort(E_qpe)
-    E_qpe = E_qpe[idx]
-    V_qpe_c = V_qpe_c[:, idx]
-    
+
+    if len(E_qpe) > 0:
+        idx = np.argsort(E_qpe)
+        E_qpe = E_qpe[idx]
+        V_qpe_c = V_qpe_c[:, idx]
+
     V_qpe = _realify_columns(V_qpe_c)
-    
+
     end_V_qpe = time.perf_counter()
 
     # =========================================================
