@@ -440,7 +440,9 @@ def _qpe_postselect_best_mode(
             continue
         v = block / norm
 
-        phi = int(bitstring, 2) / (2 ** t_count)
+        # m_mode là chỉ số counting-register thực sự được dùng để lấy block.
+        # Vì vậy pha phải được tính từ chính m_mode để tránh sai lệch endianness.
+        phi = float(m_mode) / (2 ** t_count)
         E_wrapped = _energy_from_phase(phi, t_evol)
         E_refined = _unwrap_to_reference(E_wrapped, E_target, t_evol)
 
@@ -759,48 +761,96 @@ def compute_ncut_ql_pipeline_three(
     end_V_ql = time.perf_counter()
 
     # =========================================================
-    # STEP 4: QPE refine from refined QL vectors
+    # STEP 4: QPE estimates eigenvalues from refined QL vectors
+    #         then inverse iteration refines eigenvectors
+    #
+    # Pipeline mới, tương tự nhánh IQPE:
+    #   V_QL -> QPE estimate E_QPE
+    #        -> inverse iteration(A, V_QL, E_QPE)
+    #        -> Ritz subspace refinement
     # =========================================================
     V_qpe_list = []
     E_qpe_list = []
-    refined_vecs_for_dup = []
+    qpe_selected_vecs = []
 
     k_eff = V_ql_c.shape[1]
+
     for i in range(k_eff):
+        # -----------------------------------------------------
+        # 1. Vector riêng QL là trạng thái đầu vào của QPE
+        # -----------------------------------------------------
         psi = V_ql_c[:, i]
-        psi = _deflate_against(psi, refined_vecs_for_dup)
+        psi = _deflate_against(psi, qpe_selected_vecs)
+        psi, _ = _normalize(psi)
         psi_sv = Statevector(psi)
 
-        v_ref, info = _qpe_postselect_best_mode(
+        # -----------------------------------------------------
+        # 2. QPE hậu chọn mode để ước lượng eigenvalue.
+        #    v_post chỉ phục vụ việc nhận diện mode; vector này
+        #    KHÔNG được dùng trực tiếp làm vector phân đoạn.
+        # -----------------------------------------------------
+        v_post, info = _qpe_postselect_best_mode(
             U=U,
             t_count=t_count,
             psi_in=psi_sv,
             E_target=float(E_ql[i]),
             t_evol=t_evol,
-            prev_refined_vecs=refined_vecs_for_dup,
+            prev_refined_vecs=qpe_selected_vecs,
             topM=topM,
             w_energy=w_energy,
             w_overlap=w_overlap,
             w_dup=w_dup,
         )
 
-        if v_ref is None:
-            v_ref = psi
-            E_qpe_list.append(float(E_ql[i]))
+        # -----------------------------------------------------
+        # 3. Lấy eigenvalue QPE; nếu QPE thất bại thì fallback
+        #    sang eigenvalue QL.
+        # -----------------------------------------------------
+        if (
+            v_post is None
+            or info is None
+            or info.get("fallback", False)
+            or "E_refined" not in info
+        ):
+            lam_used = float(E_ql[i])
         else:
-            E_qpe_list.append(float(info["E_refined"]))
+            lam_used = float(info["E_refined"])
 
-        v_ref = _canonicalize_phase(v_ref)
-        v_ref, _ = _normalize(v_ref)
-        refined_vecs_for_dup.append(v_ref)
-        V_qpe_list.append(v_ref)
+        # -----------------------------------------------------
+        # 4. Dùng eigenvalue QPE cùng vector QL để inverse
+        #    iteration, giống cách nhánh IQPE đang thực hiện.
+        # -----------------------------------------------------
+        try:
+            lam_new, v_new = _inverse_refine_vector(
+                A,
+                psi,
+                lam_used,
+                prev_vecs=qpe_selected_vecs,
+                n_iter=3,
+                reg=1e-5,
+            )
+        except np.linalg.LinAlgError:
+            # Hệ tuyến tính có thể gần suy biến khi lam_used rất
+            # gần eigenvalue thật. Khi đó giữ lại nghiệm QL.
+            v_new = psi.copy()
+            lam_new = float(np.real(np.vdot(v_new, A @ v_new)))
 
-    ######################## V_qpe_c = np.column_stack(V_qpe_list) if len(V_qpe_list) > 0 else np.zeros((N, 0), dtype=complex)
-    ######################## E_qpe = np.array(E_qpe_list, dtype=float)
-    ######################## V_qpe = _realify_columns(V_qpe_c)
-    
-    V_qpe_c = np.column_stack(V_qpe_list) if len(V_qpe_list) > 0 else np.zeros((N, 0), dtype=complex)
+        v_new = _canonicalize_phase(v_new)
+        v_new, _ = _normalize(v_new)
+
+        E_qpe_list.append(float(lam_new))
+        qpe_selected_vecs.append(v_new)
+        V_qpe_list.append(v_new)
+
+    V_qpe_c = (
+        np.column_stack(V_qpe_list)
+        if len(V_qpe_list) > 0
+        else np.zeros((N, 0), dtype=complex)
+    )
+
+    # =========================================================
     # FINAL SUBSPACE REFINEMENT FOR QPE
+    # =========================================================
     if V_qpe_c.shape[1] > 0:
         E_qpe_ref, V_qpe_ref = _ritz_refine_from_candidates(
             A=A,
@@ -808,7 +858,7 @@ def compute_ncut_ql_pipeline_three(
             n_keep=min(max(2 * k, k + 2), V_qpe_c.shape[1]),
             qr_tol=1e-12,
         )
-    
+
         E_qpe, V_qpe_c = _select_nontrivial_by_degree(
             E=E_qpe_ref,
             V=V_qpe_ref,
@@ -818,7 +868,7 @@ def compute_ncut_ql_pipeline_three(
     else:
         E_qpe = np.array([], dtype=float)
         V_qpe_c = np.zeros((N, 0), dtype=complex)
-    
+
     # ---------------------------------------------------------
     # FALLBACK: nếu QPE bị thiếu cột thì mượn thêm từ QL
     # ---------------------------------------------------------
@@ -826,39 +876,46 @@ def compute_ncut_ql_pipeline_three(
         missing = k - V_qpe_c.shape[1]
         extra_cols = []
         extra_E = []
-    
+
         for j in range(V_ql_c.shape[1]):
             v = V_ql_c[:, j]
-    
+
             if V_qpe_c.shape[1] > 0:
-                dup = max(_overlap_abs(v, V_qpe_c[:, t]) for t in range(V_qpe_c.shape[1]))
+                dup = max(
+                    _overlap_abs(v, V_qpe_c[:, t])
+                    for t in range(V_qpe_c.shape[1])
+                )
             else:
                 dup = 0.0
-    
+
             if dup < 0.95:
                 extra_cols.append(v.reshape(-1, 1))
                 extra_E.append(float(E_ql[j]))
-    
+
             if len(extra_cols) >= missing:
                 break
-    
+
         if len(extra_cols) > 0:
             if V_qpe_c.shape[1] > 0:
                 V_qpe_c = np.column_stack([V_qpe_c] + extra_cols)
             else:
                 V_qpe_c = np.column_stack(extra_cols)
-    
-            E_qpe = np.concatenate([E_qpe, np.array(extra_E[:missing], dtype=float)])
-    
+
+            E_qpe = np.concatenate([
+                E_qpe,
+                np.array(extra_E[:missing], dtype=float),
+            ])
+
     E_qpe = E_qpe[:k]
     V_qpe_c = V_qpe_c[:, :k]
-    
-    idx = np.argsort(E_qpe)
-    E_qpe = E_qpe[idx]
-    V_qpe_c = V_qpe_c[:, idx]
-    
+
+    if len(E_qpe) > 0:
+        idx = np.argsort(E_qpe)
+        E_qpe = E_qpe[idx]
+        V_qpe_c = V_qpe_c[:, idx]
+
     V_qpe = _realify_columns(V_qpe_c)
-    
+
     end_V_qpe = time.perf_counter()
 
     # =========================================================
@@ -1105,6 +1162,149 @@ def build_ncut_matrix(W_coo):
     A = np.eye(W_coo.shape[0], dtype=float) - W_norm
     A = 0.5 * (A + A.T)
     return A, D_vals
+
+
+# ============================================================
+# Classical Lanczos baseline for normalized-cut eigenvectors
+# ============================================================
+def compute_ncut_lanczos_cpu(
+    A: np.ndarray,
+    D_vals: np.ndarray,
+    k: int,
+    *,
+    max_iter: int = 1000,
+    tol: float = 1e-10,
+    seed: int = 123,
+    krylov_dim: int = 48,
+):
+    """
+    Tìm k eigenpairs non-trivial nhỏ nhất của normalized Laplacian A
+    bằng Lanczos cổ điển với full re-orthogonalization.
+
+    Quy trình:
+      1) Sinh cơ sở Krylov Q bằng truy hồi Lanczos ba hạng.
+      2) Lập ma trận tam đường chéo T = Q^T A Q.
+      3) Giải bài toán trị riêng nhỏ trên T.
+      4) Chiếu Ritz vectors về không gian gốc: V = QZ.
+      5) Loại vector trivial ~ sqrt(D), lấy đúng k vector nhỏ nhất.
+
+    Lưu ý công bằng:
+      - Hàm nhận trực tiếp cùng A và D_vals mà QL/QPE/IQPE sử dụng.
+      - krylov_dim mặc định 48, trùng m_krylov mặc định của QLanczos.
+      - Chỉ np.linalg.eigh(T) trên ma trận T nhỏ; không phân rã toàn bộ A.
+    """
+    A = np.asarray(A, dtype=float)
+    D_vals = np.asarray(D_vals, dtype=float)
+
+    if A.ndim != 2 or A.shape[0] != A.shape[1]:
+        raise ValueError("A must be a square matrix.")
+    if not np.allclose(A, A.T, atol=1e-10):
+        raise ValueError("A must be symmetric for classical Lanczos.")
+    if k < 1:
+        raise ValueError("k must be >= 1.")
+
+    n = A.shape[0]
+    if n < k + 1:
+        raise ValueError(
+            f"Need at least k+1={k+1} dimensions to remove the trivial vector; got n={n}."
+        )
+
+    # Cần ít nhất k+1 Ritz vectors vì một vector trivial sẽ bị loại.
+    max_steps = min(int(max_iter), n, max(int(krylov_dim), k + 2))
+
+    rng = np.random.default_rng(seed)
+    q = rng.normal(size=n).astype(np.float64)
+    q /= max(np.linalg.norm(q), 1e-15)
+
+    Q = [q]
+    alphas = []
+    betas = []
+
+    q_prev = np.zeros(n, dtype=np.float64)
+    beta_prev = 0.0
+
+    for _ in range(max_steps):
+        q_cur = Q[-1]
+        z = A @ q_cur
+
+        alpha = float(np.dot(q_cur, z))
+        alphas.append(alpha)
+
+        # Truy hồi Lanczos ba hạng.
+        z = z - alpha * q_cur - beta_prev * q_prev
+
+        # Full re-orthogonalization để giảm mất trực giao số học.
+        for q_i in Q:
+            z = z - float(np.dot(q_i, z)) * q_i
+
+        beta_new = float(np.linalg.norm(z))
+
+        # Không sinh thêm vector nếu đã hội tụ/breakdown hoặc đủ số bước.
+        if beta_new < tol or len(alphas) >= max_steps:
+            break
+
+        betas.append(beta_new)
+        q_prev = q_cur
+        beta_prev = beta_new
+        Q.append(z / beta_new)
+
+    m = len(alphas)
+    if m < k + 1:
+        raise RuntimeError(
+            f"Classical Lanczos produced only m={m} basis vectors; "
+            f"need at least k+1={k+1}. Increase krylov_dim or reduce tol."
+        )
+
+    # Ma trận tam đường chéo T_m.
+    T = np.zeros((m, m), dtype=np.float64)
+    T[np.arange(m), np.arange(m)] = np.asarray(alphas, dtype=np.float64)
+    if m > 1:
+        offdiag = np.asarray(betas[:m - 1], dtype=np.float64)
+        T[np.arange(m - 1), np.arange(1, m)] = offdiag
+        T[np.arange(1, m), np.arange(m - 1)] = offdiag
+
+    # Chỉ giải ma trận chiếu nhỏ T, không gọi eigh(A).
+    ritz_values, Z = np.linalg.eigh(T)
+    order = np.argsort(np.real(ritz_values))
+    ritz_values = np.real(ritz_values[order])
+    Z = Z[:, order]
+
+    Q_mat = np.column_stack(Q[:m])
+    V_ritz_all = Q_mat @ Z
+
+    # Chỉ giữ một nhóm nhỏ ứng viên thấp nhất trước khi loại trivial.
+    n_candidates = min(m, max(2 * k + 4, k + 2))
+    E_candidates = ritz_values[:n_candidates]
+    V_candidates = V_ritz_all[:, :n_candidates].astype(complex)
+
+    for i in range(V_candidates.shape[1]):
+        V_candidates[:, i] = _canonicalize_phase(V_candidates[:, i])
+        V_candidates[:, i], _ = _normalize(V_candidates[:, i])
+
+    E_l, V_l_c = _select_nontrivial_by_degree(
+        E=E_candidates,
+        V=V_candidates,
+        D_vals=D_vals,
+        k=k,
+    )
+
+    if V_l_c.shape[1] < k:
+        raise RuntimeError(
+            f"Classical Lanczos returned only {V_l_c.shape[1]} non-trivial vectors; expected {k}."
+        )
+
+    # Cập nhật eigenvalue bằng Rayleigh quotient trên A để nhất quán.
+    E_l = np.array([
+        float(np.real(np.vdot(V_l_c[:, i], A @ V_l_c[:, i])))
+        for i in range(V_l_c.shape[1])
+    ], dtype=float)
+
+    order = np.argsort(E_l)
+    E_l = E_l[order]
+    V_l_c = V_l_c[:, order]
+
+    V_l = _realify_columns(V_l_c)
+    return E_l, V_l
     
 def row_normalize(X, eps=1e-12):
     X = np.asarray(X, dtype=float)
@@ -1116,26 +1316,26 @@ def normalized_cuts_eigsh(imagename, image_path, output_path, k, sigma_i, sigma_
     image = color.gray2rgb(image) if image.ndim == 2 else image[:, :, :3] if image.shape[2] == 4 else image
     image = image / 255.0
 
-    start_vecs = time.perf_counter()
+    # ---------------------------------------------------------
+    # Common preprocessing for all four methods
+    # ---------------------------------------------------------
     W_coo = compute_weight_matrix_coo_knn(image, sigma_i, sigma_x)
-
     A, D_vals = build_ncut_matrix(W_coo)
     A = np.asarray(A, dtype=float)
 
-    # Traditional eigenpairs
-    evals_all, vecs_all = np.linalg.eigh(A)
-    idx_all = np.argsort(evals_all)
-    evals_all = evals_all[idx_all]
-    vecs_all = vecs_all[:, idx_all]
-
-    evals, vecs_c = _select_nontrivial_by_degree(
-        E=evals_all,
-        V=vecs_all.astype(complex),
+    # ---------------------------------------------------------
+    # L: classical Lanczos on the same normalized Laplacian A
+    # ---------------------------------------------------------
+    start_vecs = time.perf_counter()
+    evals, vecs = compute_ncut_lanczos_cpu(
+        A=A,
         D_vals=D_vals,
-        k=k
+        k=k,
+        max_iter=1000,
+        tol=1e-10,
+        seed=123,
+        krylov_dim=48,  # same default Krylov dimension as QLanczos
     )
-    vecs = _realify_columns(vecs_c)
-
     end_vecs = time.perf_counter()
 
     E_ql, E_qpe, E_iqpe, V_ql, V_qpe, V_iqpe, start_V_ql, end_V_ql, end_V_qpe, end_V_iqpe = compute_ncut_ql_pipeline_three(A, D_vals, k)
@@ -1143,7 +1343,7 @@ def normalized_cuts_eigsh(imagename, image_path, output_path, k, sigma_i, sigma_
     V_ql, V_qpe, V_iqpe = align_eigenvector_signs(vecs, V_ql, V_qpe, V_iqpe)
 
     labels = assign_labels(row_normalize(vecs), k)
-    save_seg_file(labels.reshape(image.shape[:2]), image.shape, output_path + "_L.seg", imagename)
+    save_seg_file(labels.reshape(image.shape[:2]), image.shape, output_path + "_L.seg", imagename)  # L = classical Lanczos
 
     labels = assign_labels(row_normalize(V_ql), k)
     save_seg_file(labels.reshape(image.shape[:2]), image.shape, output_path + "_QL.seg", imagename)
@@ -1190,7 +1390,7 @@ def append_eigenvectors_row_format(
         return rows
 
     rows = []
-    rows += pack("Traditional", vecs)
+    rows += pack("ClassicalLanczos", vecs)
     rows += pack("QLanczos", V_ql)
     rows += pack("QPE", V_qpe)
     rows += pack("IQPE", V_iqpe)
@@ -1256,7 +1456,7 @@ def append_eigenvalues_simple(
         return row
 
     rows = [
-        pack("Traditional", evals),
+        pack("ClassicalLanczos", evals),
         pack("QLanczos", E_ql),
         pack("QPE", E_qpe),
         pack("IQPE", E_iqpe)
