@@ -1162,6 +1162,149 @@ def build_ncut_matrix(W_coo):
     A = np.eye(W_coo.shape[0], dtype=float) - W_norm
     A = 0.5 * (A + A.T)
     return A, D_vals
+
+
+# ============================================================
+# Classical Lanczos baseline for normalized-cut eigenvectors
+# ============================================================
+def compute_ncut_lanczos_cpu(
+    A: np.ndarray,
+    D_vals: np.ndarray,
+    k: int,
+    *,
+    max_iter: int = 1000,
+    tol: float = 1e-10,
+    seed: int = 123,
+    krylov_dim: int = 48,
+):
+    """
+    Tìm k eigenpairs non-trivial nhỏ nhất của normalized Laplacian A
+    bằng Lanczos cổ điển với full re-orthogonalization.
+
+    Quy trình:
+      1) Sinh cơ sở Krylov Q bằng truy hồi Lanczos ba hạng.
+      2) Lập ma trận tam đường chéo T = Q^T A Q.
+      3) Giải bài toán trị riêng nhỏ trên T.
+      4) Chiếu Ritz vectors về không gian gốc: V = QZ.
+      5) Loại vector trivial ~ sqrt(D), lấy đúng k vector nhỏ nhất.
+
+    Lưu ý công bằng:
+      - Hàm nhận trực tiếp cùng A và D_vals mà QL/QPE/IQPE sử dụng.
+      - krylov_dim mặc định 48, trùng m_krylov mặc định của QLanczos.
+      - Chỉ np.linalg.eigh(T) trên ma trận T nhỏ; không phân rã toàn bộ A.
+    """
+    A = np.asarray(A, dtype=float)
+    D_vals = np.asarray(D_vals, dtype=float)
+
+    if A.ndim != 2 or A.shape[0] != A.shape[1]:
+        raise ValueError("A must be a square matrix.")
+    if not np.allclose(A, A.T, atol=1e-10):
+        raise ValueError("A must be symmetric for classical Lanczos.")
+    if k < 1:
+        raise ValueError("k must be >= 1.")
+
+    n = A.shape[0]
+    if n < k + 1:
+        raise ValueError(
+            f"Need at least k+1={k+1} dimensions to remove the trivial vector; got n={n}."
+        )
+
+    # Cần ít nhất k+1 Ritz vectors vì một vector trivial sẽ bị loại.
+    max_steps = min(int(max_iter), n, max(int(krylov_dim), k + 2))
+
+    rng = np.random.default_rng(seed)
+    q = rng.normal(size=n).astype(np.float64)
+    q /= max(np.linalg.norm(q), 1e-15)
+
+    Q = [q]
+    alphas = []
+    betas = []
+
+    q_prev = np.zeros(n, dtype=np.float64)
+    beta_prev = 0.0
+
+    for _ in range(max_steps):
+        q_cur = Q[-1]
+        z = A @ q_cur
+
+        alpha = float(np.dot(q_cur, z))
+        alphas.append(alpha)
+
+        # Truy hồi Lanczos ba hạng.
+        z = z - alpha * q_cur - beta_prev * q_prev
+
+        # Full re-orthogonalization để giảm mất trực giao số học.
+        for q_i in Q:
+            z = z - float(np.dot(q_i, z)) * q_i
+
+        beta_new = float(np.linalg.norm(z))
+
+        # Không sinh thêm vector nếu đã hội tụ/breakdown hoặc đủ số bước.
+        if beta_new < tol or len(alphas) >= max_steps:
+            break
+
+        betas.append(beta_new)
+        q_prev = q_cur
+        beta_prev = beta_new
+        Q.append(z / beta_new)
+
+    m = len(alphas)
+    if m < k + 1:
+        raise RuntimeError(
+            f"Classical Lanczos produced only m={m} basis vectors; "
+            f"need at least k+1={k+1}. Increase krylov_dim or reduce tol."
+        )
+
+    # Ma trận tam đường chéo T_m.
+    T = np.zeros((m, m), dtype=np.float64)
+    T[np.arange(m), np.arange(m)] = np.asarray(alphas, dtype=np.float64)
+    if m > 1:
+        offdiag = np.asarray(betas[:m - 1], dtype=np.float64)
+        T[np.arange(m - 1), np.arange(1, m)] = offdiag
+        T[np.arange(1, m), np.arange(m - 1)] = offdiag
+
+    # Chỉ giải ma trận chiếu nhỏ T, không gọi eigh(A).
+    ritz_values, Z = np.linalg.eigh(T)
+    order = np.argsort(np.real(ritz_values))
+    ritz_values = np.real(ritz_values[order])
+    Z = Z[:, order]
+
+    Q_mat = np.column_stack(Q[:m])
+    V_ritz_all = Q_mat @ Z
+
+    # Chỉ giữ một nhóm nhỏ ứng viên thấp nhất trước khi loại trivial.
+    n_candidates = min(m, max(2 * k + 4, k + 2))
+    E_candidates = ritz_values[:n_candidates]
+    V_candidates = V_ritz_all[:, :n_candidates].astype(complex)
+
+    for i in range(V_candidates.shape[1]):
+        V_candidates[:, i] = _canonicalize_phase(V_candidates[:, i])
+        V_candidates[:, i], _ = _normalize(V_candidates[:, i])
+
+    E_l, V_l_c = _select_nontrivial_by_degree(
+        E=E_candidates,
+        V=V_candidates,
+        D_vals=D_vals,
+        k=k,
+    )
+
+    if V_l_c.shape[1] < k:
+        raise RuntimeError(
+            f"Classical Lanczos returned only {V_l_c.shape[1]} non-trivial vectors; expected {k}."
+        )
+
+    # Cập nhật eigenvalue bằng Rayleigh quotient trên A để nhất quán.
+    E_l = np.array([
+        float(np.real(np.vdot(V_l_c[:, i], A @ V_l_c[:, i])))
+        for i in range(V_l_c.shape[1])
+    ], dtype=float)
+
+    order = np.argsort(E_l)
+    E_l = E_l[order]
+    V_l_c = V_l_c[:, order]
+
+    V_l = _realify_columns(V_l_c)
+    return E_l, V_l
     
 def row_normalize(X, eps=1e-12):
     X = np.asarray(X, dtype=float)
@@ -1173,26 +1316,26 @@ def normalized_cuts_eigsh(imagename, image_path, output_path, k, sigma_i, sigma_
     image = color.gray2rgb(image) if image.ndim == 2 else image[:, :, :3] if image.shape[2] == 4 else image
     image = image / 255.0
 
-    start_vecs = time.perf_counter()
+    # ---------------------------------------------------------
+    # Common preprocessing for all four methods
+    # ---------------------------------------------------------
     W_coo = compute_weight_matrix_coo_knn(image, sigma_i, sigma_x)
-
     A, D_vals = build_ncut_matrix(W_coo)
     A = np.asarray(A, dtype=float)
 
-    # Traditional eigenpairs
-    evals_all, vecs_all = np.linalg.eigh(A)
-    idx_all = np.argsort(evals_all)
-    evals_all = evals_all[idx_all]
-    vecs_all = vecs_all[:, idx_all]
-
-    evals, vecs_c = _select_nontrivial_by_degree(
-        E=evals_all,
-        V=vecs_all.astype(complex),
+    # ---------------------------------------------------------
+    # L: classical Lanczos on the same normalized Laplacian A
+    # ---------------------------------------------------------
+    start_vecs = time.perf_counter()
+    evals, vecs = compute_ncut_lanczos_cpu(
+        A=A,
         D_vals=D_vals,
-        k=k
+        k=k,
+        max_iter=1000,
+        tol=1e-10,
+        seed=123,
+        krylov_dim=48,  # same default Krylov dimension as QLanczos
     )
-    vecs = _realify_columns(vecs_c)
-
     end_vecs = time.perf_counter()
 
     E_ql, E_qpe, E_iqpe, V_ql, V_qpe, V_iqpe, start_V_ql, end_V_ql, end_V_qpe, end_V_iqpe = compute_ncut_ql_pipeline_three(A, D_vals, k)
@@ -1200,7 +1343,7 @@ def normalized_cuts_eigsh(imagename, image_path, output_path, k, sigma_i, sigma_
     V_ql, V_qpe, V_iqpe = align_eigenvector_signs(vecs, V_ql, V_qpe, V_iqpe)
 
     labels = assign_labels(row_normalize(vecs), k)
-    save_seg_file(labels.reshape(image.shape[:2]), image.shape, output_path + "_L.seg", imagename)
+    save_seg_file(labels.reshape(image.shape[:2]), image.shape, output_path + "_L.seg", imagename)  # L = classical Lanczos
 
     labels = assign_labels(row_normalize(V_ql), k)
     save_seg_file(labels.reshape(image.shape[:2]), image.shape, output_path + "_QL.seg", imagename)
@@ -1247,7 +1390,7 @@ def append_eigenvectors_row_format(
         return rows
 
     rows = []
-    rows += pack("Traditional", vecs)
+    rows += pack("ClassicalLanczos", vecs)
     rows += pack("QLanczos", V_ql)
     rows += pack("QPE", V_qpe)
     rows += pack("IQPE", V_iqpe)
@@ -1313,7 +1456,7 @@ def append_eigenvalues_simple(
         return row
 
     rows = [
-        pack("Traditional", evals),
+        pack("ClassicalLanczos", evals),
         pack("QLanczos", E_ql),
         pack("QPE", E_qpe),
         pack("IQPE", E_iqpe)
